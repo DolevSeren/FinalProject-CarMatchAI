@@ -27,7 +27,6 @@ def test_nhtsa_safety_years_and_makes_models():
 
     makes = SAFETY.makes(TEST_YEAR)
     assert isinstance(makes, list) and len(makes) > 0
-    # אחרי נרמול Title Case בשירות, זה אמור לעבור
     assert TEST_MAKE in makes
 
     models = SAFETY.models(TEST_YEAR, TEST_MAKE)
@@ -73,7 +72,6 @@ def test_fueleconomy_flow_menu_to_vehicle():
 
     makes = FUEL.menu_makes(TEST_YEAR)
     assert isinstance(makes, list) and len(makes) > 0
-    # האיות של FuelEconomy הוא Title Case לרוב; נשווה ישירות
     assert TEST_MAKE in makes
 
     models = FUEL.menu_models(TEST_YEAR, TEST_MAKE)

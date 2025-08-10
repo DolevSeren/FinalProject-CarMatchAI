@@ -1,31 +1,55 @@
 # agent/orchestrator.py
-from typing import Dict, Any
-from matching.domain import UserProfile
-from agent.providers import GlobalAPIProvider
-from matching.matcher import filter_by_condition_and_budget, rank_cars
+import pandas as pd
+from matching.engine import rank_cars
+from collections import namedtuple
 
-def build_user_profile(answers: Dict[str, Any]) -> UserProfile:
-    return UserProfile(
-        condition=answers.get("condition","any"),
-        budget_usd=float(answers.get("budget_usd") or 0),
-        passengers=int(answers.get("passengers", 1)),
-        annual_km=answers.get("annual_km"),
-        terrain=answers.get("terrain"),
-        comfort_priority=bool(answers.get("comfort_priority")),
-        fun_to_drive_priority=bool(answers.get("fun_priority")),
-        years_to_keep=answers.get("years_to_keep"),
+# מבנה פשוט לייצוג רכב
+Car = namedtuple("Car", ["make", "model", "price_new_usd", "price_used_usd"])
+
+def get_recommendations(answers, api_key=None):
+    """
+    ממיר את תשובות המשתמש לקריאה למנוע ההתאמה ומחזיר תוצאות.
+    """
+    # טען את הקטלוג
+    df = pd.read_parquet("data/catalog_us.parquet")
+
+    # סינון לפי סוג דלק אם נבחר
+    fuel_type = answers.get("fuel_type", "any")
+    if fuel_type and fuel_type.lower() != "any":
+        df = df[df["fuelType"].str.lower().str.contains(fuel_type.lower(), na=False)]
+
+    # קריאה למנוע ההתאמה
+    ranked_df = rank_cars(
+        df=df,
+        usage=answers.get("usage", "mixed"),
+        passengers=answers.get("passengers", 1),
+        budget_usd=answers.get("budget_usd", 50000),
+        comfort_priority=answers.get("comfort_priority", False),
+        fun_priority=answers.get("fun_priority", False),
+        terrain=answers.get("terrain", None),
+        years_to_keep=answers.get("years_to_keep", 5),
         special_needs=answers.get("special_needs", []),
+        condition=answers.get("condition", "any"),
+        top_n=3,  # מגביל ל־3 תוצאות בלבד
+        max_per_model=1,
+        max_share_per_fuel=0.6
     )
 
-def get_recommendations(answers: Dict[str, Any], api_key: str):
-    user = build_user_profile(answers)
-    cars = GlobalAPIProvider(api_key).fetch()
+    # המרה לאובייקטים פשוטים
+    results = {}
+    for cond in ["new", "used"]:
+        if cond in ranked_df:
+            results[cond] = [
+                (
+                    Car(
+                        make=row["make"],
+                        model=row["model"],
+                        price_new_usd=row.get("price_new_usd", 0),
+                        price_used_usd=row.get("price_used_usd", 0)
+                    ),
+                    round(row["score"], 3)
+                )
+                for _, row in ranked_df[cond].iterrows()
+            ]
 
-    new_list, used_list = filter_by_condition_and_budget(cars, user)
-
-    result = {}
-    if user.condition in ("new", "any"):
-        result["new"] = rank_cars(new_list, user)[:20]
-    if user.condition in ("used", "any"):
-        result["used"] = rank_cars(used_list, user)[:20]
-    return user, result
+    return answers, results

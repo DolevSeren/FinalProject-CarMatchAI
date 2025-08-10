@@ -1,5 +1,6 @@
 # app/main.py
-# UI is English-only; # הערות מותר בעברית בתוך הקוד
+# UI is English-only; הערות בעברית מותרות בתוך הקוד
+
 import sys, os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -24,13 +25,8 @@ def normalize_condition(s: str) -> str:
 
 def normalize_fuel(s: str) -> str:
     s = (s or "").strip().lower()
-    if s in ["bev", "electric", "ev"]:
-        return "bev"
-    if s in ["phev", "plugin hybrid", "plug-in hybrid"]:
-        return "phev"
-    if s in ["gas", "petrol", "gasoline"]:
-        return "gas"
-    return "any"
+    valid = ["bev", "phev", "gas", "any"]
+    return s if s in valid else "any"
 
 def parse_int(s: str, default=None):
     try:
@@ -39,7 +35,7 @@ def parse_int(s: str, default=None):
         return default
 
 def clean_one_line(text: str) -> str:
-    """# מנקה שורות ורווחים, מחזיר טקסט שורה אחת"""
+    """ מנקה שורות ורווחים, מחזיר טקסט שורה אחת """
     text = (text or "").strip()
     lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
     return " ".join(lines)
@@ -59,14 +55,12 @@ QUESTIONS = [
 ]
 
 def ask_next_question():
-    """# מוסיף לצ'אט את השאלה הבאה ומסמן שמחכים לתשובה"""
     key, question = QUESTIONS[st.session_state.step]
     st.session_state.chat_messages.append({"role": "assistant", "content": question})
     st.session_state.awaiting_answer = True
 
 # --------------- CHAT MODE -------------------
 if mode == "Chat":
-    # Init session state
     if "chat_messages" not in st.session_state:
         st.session_state.chat_messages = [
             {"role": "assistant", "content": "I’ll ask a few quick questions to learn your needs, then recommend cars. Ready?"}
@@ -80,7 +74,6 @@ if mode == "Chat":
         st.session_state.results_shown = False
         ask_next_question()
 
-    # Render chat history
     for m in st.session_state.chat_messages:
         with st.chat_message(m["role"]):
             st.write(m["content"])
@@ -90,7 +83,6 @@ if mode == "Chat":
     if user_msg:
         st.session_state.chat_messages.append({"role": "user", "content": user_msg})
 
-        # 1) After Ack — expecting yes/no
         if st.session_state.awaiting_yes_no:
             ans = user_msg.strip().lower()
             if ans in ["yes", "y"]:
@@ -111,7 +103,6 @@ if mode == "Chat":
                 st.session_state.chat_messages.append({"role": "assistant", "content": "Please answer with yes or no."})
                 st.rerun()
 
-        # 2) Short explanation after NO
         elif st.session_state.awaiting_clarification:
             key = st.session_state.last_field
             st.session_state.answers[f"{key}_clarification"] = user_msg.strip()
@@ -121,7 +112,6 @@ if mode == "Chat":
                 ask_next_question()
             st.rerun()
 
-        # 3) Regular answer (before Ack)
         elif st.session_state.awaiting_answer and st.session_state.step < len(QUESTIONS):
             key, _ = QUESTIONS[st.session_state.step]
             st.session_state.last_field = key
@@ -150,6 +140,7 @@ if mode == "Chat":
                 st.session_state.answers["special_needs"] = needs
 
             ack_obj = chat_acknowledge(key, user_msg, st.session_state.answers)
+            text = clean_one_line(ack_obj.get("text", ""))
 
             if ack_obj.get("skip"):
                 st.session_state.awaiting_answer = False
@@ -158,13 +149,10 @@ if mode == "Chat":
                     ask_next_question()
                 st.rerun()
 
-            text = clean_one_line(ack_obj.get("text", ""))
             if ack_obj.get("require_confirm"):
                 confirm_line = ack_obj.get("confirm_text") or "Did I get that right? (yes/no)"
                 if not confirm_line.strip().lower().endswith("(yes/no)"):
                     confirm_line = confirm_line.rstrip(".?") + " (yes/no)"
-                if text.endswith("?"):
-                    text = text[:-1]
                 final_ack = f"{text} {confirm_line}".strip()
                 st.session_state.chat_messages.append({"role": "assistant", "content": final_ack})
                 st.session_state.awaiting_yes_no = True
@@ -177,7 +165,6 @@ if mode == "Chat":
                     ask_next_question()
             st.rerun()
 
-    # ---- End of flow: Summary + Recommendations ----
     if (not st.session_state.awaiting_answer
         and not st.session_state.awaiting_yes_no
         and not st.session_state.awaiting_clarification
@@ -189,13 +176,24 @@ if mode == "Chat":
             st.write(clean_one_line(summary))
             st.write("Alright, let me crunch the numbers and find your match… 🚗💨")
 
-        user, result = get_recommendations(st.session_state.answers, api_key="", top_n=3)
+        user, result = get_recommendations(st.session_state.answers, api_key="")
 
-        key = "new" if "new" in result else "used"
-        st.subheader(key.capitalize())
-        for car, score in result[key]:
-            price = car.price_new_usd if key == "new" else car.price_used_usd
-            st.write(f"**{car.make} {car.model}** — score {score:.3f} | est. ${price:,.0f}")
+        if "new" in result and "used" in result:
+            col1, col2 = st.columns(2)
+            with col1:
+                st.subheader("New")
+                for car, score in result["new"]:
+                    st.write(f"**{car.make} {car.model}** — score {score} | est. ${car.price_new_usd:,.0f}")
+            with col2:
+                st.subheader("Used")
+                for car, score in result["used"]:
+                    st.write(f"**{car.make} {car.model}** — score {score} | est. ${car.price_used_usd:,.0f}")
+        else:
+            key = "new" if "new" in result else "used"
+            st.subheader(key.capitalize())
+            for car, score in result[key]:
+                price = car.price_new_usd if key == "new" else car.price_used_usd
+                st.write(f"**{car.make} {car.model}** — score {score} | est. ${price:,.0f}")
 
         st.session_state.results_shown = True
 
@@ -208,7 +206,7 @@ else:
     with st.form("user_form"):
         condition = st.selectbox("New / Used / Any?", ["new", "used", "any"], index=2)
         budget = st.number_input("Budget (USD)", min_value=5000, step=500, value=30000)
-        fuel_type = st.selectbox("Fuel type", ["any", "gas", "phev", "bev"], index=0)
+        fuel_type = st.selectbox("Fuel type", ["bev", "phev", "gas", "any"], index=3)
         passengers = st.number_input("Passengers", min_value=1, max_value=8, value=4)
         comfort = st.checkbox("Comfort is a priority")
         fun = st.checkbox("Fun-to-drive is a priority")
@@ -219,14 +217,24 @@ else:
 
     if submitted:
         answers = dict(
-            condition=condition, budget_usd=budget, passengers=passengers,
-            fuel_type=fuel_type,
-            comfort_priority=comfort, fun_priority=fun, terrain=terrain or None,
-            years_to_keep=years, special_needs=needs
+            condition=condition, budget_usd=budget, fuel_type=fuel_type,
+            passengers=passengers, comfort_priority=comfort, fun_priority=fun,
+            terrain=terrain or None, years_to_keep=years, special_needs=needs
         )
-        user, result = get_recommendations(answers, api_key="", top_n=3)
-        key = "new" if "new" in result else "used"
-        st.subheader(key.capitalize())
-        for car, score in result[key]:
-            price = car.price_new_usd if key == "new" else car.price_used_usd
-            st.write(f"**{car.make} {car.model}** — score {score:.3f} | est. ${price:,.0f}")
+        user, result = get_recommendations(answers, api_key="")
+        if "new" in result and "used" in result:
+            col1, col2 = st.columns(2)
+            with col1:
+                st.subheader("New")
+                for car, score in result["new"]:
+                    st.write(f"**{car.make} {car.model}** — score {score} | est. ${car.price_new_usd:,.0f}")
+            with col2:
+                st.subheader("Used")
+                for car, score in result["used"]:
+                    st.write(f"**{car.make} {car.model}** — score {score} | est. ${car.price_used_usd:,.0f}")
+        else:
+            key = "new" if "new" in result else "used"
+            st.subheader(key.capitalize())
+            for car, score in result[key]:
+                price = car.price_new_usd if key == "new" else car.price_used_usd
+                st.write(f"**{car.make} {car.model}** — score {score} | est. ${price:,.0f}")

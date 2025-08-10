@@ -1,14 +1,22 @@
-import os
-from .http import Http
-BASE = "https://marketcheck-prod.apigee.net/v2"
+# services/marketcheck.py
+"""
+גשר תאימות:
+    from services.marketcheck import MarketCheck
+וגם מייצא פונקציה search מה-provider.
+"""
+from typing import Optional, List
+from .providers.http import Http
+from .providers.marketcheck import search as _search
+from domain.car import Car
+from domain.user_profile import UserProfile
 
-class Marketcheck:
-    def __init__(self, http: Http | None = None, api_key: str | None = None):
+class MarketCheck:
+    def __init__(self, http: Optional[Http] = None):
         self.http = http or Http()
-        self.key = api_key or os.getenv("MARKETCHECK_API_KEY")
-        if not self.key:
-            raise RuntimeError("MARKETCHECK_API_KEY is required")
 
-    def search(self, query: dict) -> dict:
-        params = {"api_key": self.key, **query}
-        return self.http.get(f"{BASE}/search", params=params).json()
+    def search(self, profile: UserProfile) -> List[Car]:
+        return _search(profile)
+
+# פונקציה ברמת מודול למי שמייבא כך
+def search(profile: UserProfile) -> List[Car]:
+    return _search(profile)

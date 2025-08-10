@@ -5,12 +5,14 @@ from domain.user_profile import UserProfile
 from domain.car import Car
 
 # ייבוא ישיר מ- providers (איפה שה-APIים שלך)
+# services/matching/matcher.py
 import services.providers.marketcheck as marketcheck
 import services.providers.carquery as carquery
 import services.providers.fueleconomy as fueleconomy
 import services.providers.nhtsa_recalls as nhtsa_recalls
-import services.providers.nhtsa_safety as nhtsa_safety  # לשימוש עתידי אם תרצה
+import services.providers.nhtsa_safety as nhtsa_safety  # לשימוש עתידי אם צריך
 import services.providers.vpic as vpic
+
 
 
 def _score(car: Car, profile: UserProfile) -> float:

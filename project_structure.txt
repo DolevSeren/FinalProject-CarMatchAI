@@ -1,0 +1,56 @@
+.
+├── agent
+│   ├── __init__.py
+│   ├── enrich_model.py
+│   ├── fetch_models.py
+│   ├── llm.py
+│   ├── orchestrator.py
+│   └── providers.py
+├── app
+│   ├── __init__.py
+│   └── main.py
+├── archive
+│   ├── main_backup.py
+│   ├── main_form_backup.py
+│   └── utils
+│       └── logic.py
+├── data
+│   ├── models_sample.json
+│   └── session_logs.jsonl
+├── domain
+│   ├── car.py
+│   └── user_profile.py
+├── matching
+│   ├── __init__.py
+│   ├── domain.py
+│   └── matcher.py
+├── project_structure.txt
+├── requirements.txt
+├── services
+│   ├── __init__.py
+│   ├── carquery.py
+│   ├── fueleconomy.py
+│   ├── http.py
+│   ├── marketcheck.py
+│   ├── matching
+│   │   └── matcher.py
+│   ├── nhtsa_recalls.py
+│   ├── nhtsa_safety.py
+│   ├── normalization
+│   │   └── model_normalizer.py
+│   ├── providers
+│   │   ├── __init__.py
+│   │   ├── carquery.py
+│   │   ├── fueleconomy.py
+│   │   ├── http.py
+│   │   ├── marketcheck.py
+│   │   ├── nhtsa_recalls.py
+│   │   ├── nhtsa_safety.py
+│   │   └── vpic.py
+│   └── vpic.py
+└── tests
+    ├── __init__.py
+    ├── test_e2e_matching.py
+    └── test_services.py
+
+13 directories, 41 files

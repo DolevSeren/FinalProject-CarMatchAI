@@ -1,240 +1,158 @@
-# app/main.py
-# UI is English-only; הערות בעברית מותרות בתוך הקוד
 
-import sys, os
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# app/streamlit_app.py (drop-in)
+# UI is English-only; Hebrew comments allowed in code.
 
+import os, sys
+import pathlib
 import streamlit as st
-from agent.orchestrator import get_recommendations
-from agent.llm import chat_acknowledge, chat_clarify_no, chat_summary_funny
 
-# ---------------- App config ----------------
+# ---------- Import orchestration ----------
+# Allow running either from project root or from this file's folder
+THIS = pathlib.Path(__file__).resolve()
+ROOT = THIS.parent
+for extra in [ROOT, ROOT.parent, pathlib.Path.cwd()]:
+    if str(extra) not in sys.path:
+        sys.path.append(str(extra))
+
+try:
+    from agent.orchestrator import get_recommendations
+except Exception:
+    # Fallback: if the project isn't packaged as agent/* yet, try local orchestrator.py
+    from orchestrator import get_recommendations  # type: ignore
+
+# ---------- Catalog path detection ----------
+def detect_catalog_path() -> str | None:
+    candidates = [
+        os.getenv("CARMATCH_US_CATALOG"),
+        "data/catalog_us.parquet",
+        str(ROOT / "data" / "catalog_us.parquet"),
+        str(ROOT.parent / "data" / "catalog_us.parquet"),
+        "catalog_us.parquet",
+        str(ROOT / "catalog_us.parquet"),
+    ]
+    for p in candidates:
+        if p and os.path.exists(p):
+            return p
+    return None
+
+CATALOG_PATH = detect_catalog_path()
+
+# ---------- App UI ----------
 st.set_page_config(page_title="CarMatch AI – Global", layout="wide")
 st.title("CarMatch AI – Global")
 
-mode = st.radio("Mode", ["Chat", "Form"], index=0, horizontal=True)
+with st.sidebar:
+    st.header("User Preferences")
+    condition = st.selectbox("Condition", ["any", "new", "used"], index=0)
+    usage = st.radio("Usage pattern", ["mixed", "city", "highway"], index=0, horizontal=True)
+    passengers = st.number_input("Passengers", min_value=1, max_value=9, value=4, step=1)
+    annual_km = st.number_input("Annual kilometers", min_value=0, max_value=100000, value=12000, step=500)
+    terrain = st.selectbox("Typical terrain", ["flat", "hilly"], index=0)
+    budget_str = st.text_input("Budget (USD, optional)", value="25000")
+    fuel_type = st.selectbox("Fuel type filter", ["any", "gas", "phev", "bev"], index=0)
 
-# ---------------- Helpers -------------------
-def normalize_condition(s: str) -> str:
-    s = (s or "").strip().lower()
-    if s in ["new", "n"]:
-        return "new"
-    if s in ["used", "u", "preowned", "pre-owned", "second hand", "second-hand"]:
-        return "used"
-    return "any"
+    st.divider()
+    st.subheader("Ranking Options")
+    top_n = st.slider("Top N", min_value=3, max_value=50, value=10, step=1)
+    min_mpg_str = st.text_input("Min combined MPG (optional)", value="")
+    max_per_model = st.slider("Max vehicles per model", 1, 3, 1)
+    max_share_per_fuel = st.slider("Max share per single fuel-type", 0.5, 1.0, 0.7, step=0.05)
 
-def normalize_fuel(s: str) -> str:
-    s = (s or "").strip().lower()
-    valid = ["bev", "phev", "gas", "any"]
-    return s if s in valid else "any"
+    st.divider()
+    st.subheader("Priorities")
+    prioritize_mpg = st.checkbox("Prioritize efficiency (MPG/Range)", value=True)
+    prioritize_safety = st.checkbox("Prioritize safety", value=True)
+    prioritize_space = st.checkbox("Prioritize seating/space", value=False)
 
-def parse_int(s: str, default=None):
+    st.caption("Tip: You can paste weights override as JSON under the 'Advanced' section.")
+    with st.expander("Advanced (weights override JSON)"):
+        weights_json = st.text_area("weights (JSON)", value="", height=120,
+                                    placeholder='e.g. {"mpg":0.5, "safety":0.3, "passengers":0.2}')
+
+col_left, col_right = st.columns([1,1])
+
+with col_left:
+    run = st.button("Find cars", type="primary")
+
+with col_right:
+    st.write("Catalog:", CATALOG_PATH if CATALOG_PATH else "Not found (set CARMATCH_US_CATALOG)")
+
+def _to_float_or_none(s: str):
+    s = (s or "").strip()
+    if not s:
+        return None
     try:
-        return int(str(s).replace(",", "").strip())
+        return float(s.replace(",", ""))
     except Exception:
-        return default
+        return None
 
-def clean_one_line(text: str) -> str:
-    """ מנקה שורות ורווחים, מחזיר טקסט שורה אחת """
-    text = (text or "").strip()
-    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
-    return " ".join(lines)
+if run:
+    answers = {
+        "condition": condition,
+        "usage": usage,
+        "passengers": int(passengers),
+        "annual_km": int(annual_km),
+        "terrain": terrain,
+        "budget_usd": _to_float_or_none(budget_str),
+        "fuel_type": fuel_type,
+        "top_n": int(top_n),
+        "min_mpg": _to_float_or_none(min_mpg_str),
+        "max_per_model": int(max_per_model),
+        "max_share_per_fuel": float(max_share_per_fuel),
+        "prioritize_mpg": bool(prioritize_mpg),
+        "prioritize_safety": bool(prioritize_safety),
+        "prioritize_space": bool(prioritize_space),
+    }
 
-# כל השאלות בסדר
-QUESTIONS = [
-    ("condition", "New or used? (new / used / any)"),
-    ("budget_usd", "What's your budget in USD? (number)"),
-    ("fuel_type", "Preferred fuel? (bev / phev / gas / any)"),
-    ("passengers", "How many passengers usually ride with you? (number)"),
-    ("annual_km", "How many kilometers per year? (press Enter to skip)"),
-    ("terrain", "Typical terrain? (flat / hilly, or leave blank)"),
-    ("comfort_priority", "Is comfort a priority? (yes/no)"),
-    ("fun_priority", "Is fun-to-drive more important than efficiency? (yes/no)"),
-    ("years_to_keep", "How many years do you plan to keep the car? (number)"),
-    ("special_needs", "Any special needs? comma-separated (tow_hook, awd, high_seating) or leave blank"),
-]
+    # Optional weights override
+    weights = {}
+    if weights_json.strip():
+        try:
+            import json
+            weights = json.loads(weights_json)
+            if isinstance(weights, dict):
+                answers["weights"] = weights
+        except Exception as e:
+            st.warning(f"Invalid weights JSON: {e}")
 
-def ask_next_question():
-    key, question = QUESTIONS[st.session_state.step]
-    st.session_state.chat_messages.append({"role": "assistant", "content": question})
-    st.session_state.awaiting_answer = True
+    # Set env for catalog if our detection found one
+    catalog_path = CATALOG_PATH
+    if catalog_path:
+        os.environ["CARMATCH_US_CATALOG"] = catalog_path
 
-# --------------- CHAT MODE -------------------
-if mode == "Chat":
-    if "chat_messages" not in st.session_state:
-        st.session_state.chat_messages = [
-            {"role": "assistant", "content": "I’ll ask a few quick questions to learn your needs, then recommend cars. Ready?"}
-        ]
-        st.session_state.step = 0
-        st.session_state.answers = {}
-        st.session_state.awaiting_answer = False
-        st.session_state.awaiting_yes_no = False
-        st.session_state.awaiting_clarification = False
-        st.session_state.last_field = None
-        st.session_state.results_shown = False
-        ask_next_question()
+    with st.spinner("Ranking cars..."):
+        try:
+            result = get_recommendations(answers, catalog_path=catalog_path)
+        except Exception as e:
+            st.error(f"Failed to get recommendations: {e}")
+            st.stop()
 
-    for m in st.session_state.chat_messages:
-        with st.chat_message(m["role"]):
-            st.write(m["content"])
+    st.success(f"Found {result.get('count', 0)} vehicles")
+    # Show profile used
+    with st.expander("Profile used for ranking"):
+        st.json(result.get("profile", {}))
 
-    user_msg = st.chat_input("Your answer...")
+    items = result.get("results", [])
+    if not items:
+        st.info("No vehicles matched your filters. Try relaxing constraints.")
+    else:
+        # Simple grid view
+        import pandas as pd
+        cols = [c for c in [
+            "make","model","option_text","VClass","fuelType",
+            "passengers","MPG_comb","overall_safety","Range_mi","electricRange_mi",
+            "price_best","price_source","annual_fuel_cost","score"
+        ] if items and c in items[0]]
+        df = pd.DataFrame([{k: it.get(k) for k in cols} for it in items])
+        st.dataframe(df, use_container_width=True, hide_index=True)
 
-    if user_msg:
-        st.session_state.chat_messages.append({"role": "user", "content": user_msg})
-
-        if st.session_state.awaiting_yes_no:
-            ans = user_msg.strip().lower()
-            if ans in ["yes", "y"]:
-                st.session_state.awaiting_yes_no = False
-                st.session_state.awaiting_answer = False
-                st.session_state.awaiting_clarification = False
-                st.session_state.step += 1
-                if st.session_state.step < len(QUESTIONS):
-                    ask_next_question()
-                st.rerun()
-            elif ans in ["no", "n"]:
-                clarify = chat_clarify_no(st.session_state.last_field, st.session_state.answers)
-                st.session_state.chat_messages.append({"role": "assistant", "content": clean_one_line(clarify)})
-                st.session_state.awaiting_yes_no = False
-                st.session_state.awaiting_clarification = True
-                st.rerun()
-            else:
-                st.session_state.chat_messages.append({"role": "assistant", "content": "Please answer with yes or no."})
-                st.rerun()
-
-        elif st.session_state.awaiting_clarification:
-            key = st.session_state.last_field
-            st.session_state.answers[f"{key}_clarification"] = user_msg.strip()
-            st.session_state.awaiting_clarification = False
-            st.session_state.step += 1
-            if st.session_state.step < len(QUESTIONS):
-                ask_next_question()
-            st.rerun()
-
-        elif st.session_state.awaiting_answer and st.session_state.step < len(QUESTIONS):
-            key, _ = QUESTIONS[st.session_state.step]
-            st.session_state.last_field = key
-
-            if key == "condition":
-                st.session_state.answers["condition"] = normalize_condition(user_msg)
-            elif key == "budget_usd":
-                st.session_state.answers["budget_usd"] = parse_int(user_msg, 0)
-            elif key == "fuel_type":
-                st.session_state.answers["fuel_type"] = normalize_fuel(user_msg)
-            elif key == "passengers":
-                st.session_state.answers["passengers"] = parse_int(user_msg, 1)
-            elif key == "annual_km":
-                st.session_state.answers["annual_km"] = parse_int(user_msg) if user_msg.strip() else None
-            elif key == "terrain":
-                t = user_msg.strip().lower()
-                st.session_state.answers["terrain"] = t if t in ["flat", "hilly"] else None
-            elif key == "comfort_priority":
-                st.session_state.answers["comfort_priority"] = user_msg.strip().lower() in ["yes", "y", "true"]
-            elif key == "fun_priority":
-                st.session_state.answers["fun_priority"] = user_msg.strip().lower() in ["yes", "y", "true"]
-            elif key == "years_to_keep":
-                st.session_state.answers["years_to_keep"] = parse_int(user_msg, 5)
-            elif key == "special_needs":
-                needs = [x.strip() for x in user_msg.split(",") if x.strip()] if user_msg.strip() else []
-                st.session_state.answers["special_needs"] = needs
-
-            ack_obj = chat_acknowledge(key, user_msg, st.session_state.answers)
-            text = clean_one_line(ack_obj.get("text", ""))
-
-            if ack_obj.get("skip"):
-                st.session_state.awaiting_answer = False
-                st.session_state.step += 1
-                if st.session_state.step < len(QUESTIONS):
-                    ask_next_question()
-                st.rerun()
-
-            if ack_obj.get("require_confirm"):
-                confirm_line = ack_obj.get("confirm_text") or "Did I get that right? (yes/no)"
-                if not confirm_line.strip().lower().endswith("(yes/no)"):
-                    confirm_line = confirm_line.rstrip(".?") + " (yes/no)"
-                final_ack = f"{text} {confirm_line}".strip()
-                st.session_state.chat_messages.append({"role": "assistant", "content": final_ack})
-                st.session_state.awaiting_yes_no = True
-                st.session_state.awaiting_answer = False
-            else:
-                st.session_state.chat_messages.append({"role": "assistant", "content": text})
-                st.session_state.awaiting_answer = False
-                st.session_state.step += 1
-                if st.session_state.step < len(QUESTIONS):
-                    ask_next_question()
-            st.rerun()
-
-    if (not st.session_state.awaiting_answer
-        and not st.session_state.awaiting_yes_no
-        and not st.session_state.awaiting_clarification
-        and st.session_state.step >= len(QUESTIONS)
-        and not st.session_state.results_shown):
-
-        with st.chat_message("assistant"):
-            summary = chat_summary_funny(st.session_state.answers)
-            st.write(clean_one_line(summary))
-            st.write("Alright, let me crunch the numbers and find your match… 🚗💨")
-
-        user, result = get_recommendations(st.session_state.answers, api_key="")
-
-        if "new" in result and "used" in result:
-            col1, col2 = st.columns(2)
-            with col1:
-                st.subheader("New")
-                for car, score in result["new"]:
-                    st.write(f"**{car.make} {car.model}** — score {score} | est. ${car.price_new_usd:,.0f}")
-            with col2:
-                st.subheader("Used")
-                for car, score in result["used"]:
-                    st.write(f"**{car.make} {car.model}** — score {score} | est. ${car.price_used_usd:,.0f}")
-        else:
-            key = "new" if "new" in result else "used"
-            st.subheader(key.capitalize())
-            for car, score in result[key]:
-                price = car.price_new_usd if key == "new" else car.price_used_usd
-                st.write(f"**{car.make} {car.model}** — score {score} | est. ${price:,.0f}")
-
-        st.session_state.results_shown = True
-
-    if st.button("Start a new chat"):
-        st.session_state.clear()
-        st.rerun()
-
-# --------------- FORM MODE ---------------
-else:
-    with st.form("user_form"):
-        condition = st.selectbox("New / Used / Any?", ["new", "used", "any"], index=2)
-        budget = st.number_input("Budget (USD)", min_value=5000, step=500, value=30000)
-        fuel_type = st.selectbox("Fuel type", ["bev", "phev", "gas", "any"], index=3)
-        passengers = st.number_input("Passengers", min_value=1, max_value=8, value=4)
-        comfort = st.checkbox("Comfort is a priority")
-        fun = st.checkbox("Fun-to-drive is a priority")
-        terrain = st.selectbox("Terrain", ["", "flat", "hilly"], index=0)
-        years = st.number_input("Years to keep", min_value=1, max_value=12, value=5)
-        needs = st.multiselect("Special needs", ["tow_hook", "awd", "high_seating"])
-        submitted = st.form_submit_button("Get recommendations")
-
-    if submitted:
-        answers = dict(
-            condition=condition, budget_usd=budget, fuel_type=fuel_type,
-            passengers=passengers, comfort_priority=comfort, fun_priority=fun,
-            terrain=terrain or None, years_to_keep=years, special_needs=needs
-        )
-        user, result = get_recommendations(answers, api_key="")
-        if "new" in result and "used" in result:
-            col1, col2 = st.columns(2)
-            with col1:
-                st.subheader("New")
-                for car, score in result["new"]:
-                    st.write(f"**{car.make} {car.model}** — score {score} | est. ${car.price_new_usd:,.0f}")
-            with col2:
-                st.subheader("Used")
-                for car, score in result["used"]:
-                    st.write(f"**{car.make} {car.model}** — score {score} | est. ${car.price_used_usd:,.0f}")
-        else:
-            key = "new" if "new" in result else "used"
-            st.subheader(key.capitalize())
-            for car, score in result[key]:
-                price = car.price_new_usd if key == "new" else car.price_used_usd
-                st.write(f"**{car.make} {car.model}** — score {score} | est. ${price:,.0f}")
+        # Reasons per row
+        st.subheader("Why these picks?")
+        for i, it in enumerate(items, start=1):
+            with st.expander(f"#{i} — {it.get('make')} {it.get('model')} (score {it.get('score')})"):
+                reasons = it.get("reasons") or []
+                if isinstance(reasons, (list, tuple)):
+                    for r in reasons:
+                        st.markdown(f"- {r}")
+                else:
+                    st.write(reasons)

@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import List, Dict, Any, Optional, Tuple
+from typing import List, Dict, Any, Optional
 import pandas as pd
 import numpy as np
 import os
@@ -106,6 +106,10 @@ def _passenger_fit(capacity: Any, required: int) -> float:
 
 
 def _budget_fit(price: Optional[float], budget: Optional[float]) -> float:
+    """
+    1. אם המחיר <= תקציב: ציון גבוה, עולה ככל שמתקרבים לתקציב (עידוד ניצול תקציב חכם).
+    2. אם המחיר מעל התקציב: ענישה ליניארית עד 0, עם מרחב קטן לסבילות.
+    """
     if price is None or budget is None:
         return 0.5
     try:
@@ -113,11 +117,22 @@ def _budget_fit(price: Optional[float], budget: Optional[float]) -> float:
         budget = float(budget)
     except Exception:
         return 0.5
+    if budget <= 0:
+        return 0.5
     if price <= budget:
-        ratio = price / max(budget, 1.0)
-        return float(np.clip(1.0 - 0.6 * (1.0 - ratio), 0.0, 1.0))
-    over = (price - budget) / max(budget, 1.0)
-    return float(np.clip(0.7 - 1.5 * over, 0.0, 0.7))
+        ratio = price / budget
+        # קרוב יותר לתקציב -> מעט עדיף (לא לעודד בזבוז גדול)
+        return float(np.clip(0.7 + 0.3 * ratio, 0.0, 1.0))
+    over = (price - budget) / budget
+    return float(np.clip(0.8 - 1.6 * over, 0.0, 0.8))
+
+
+def _fmt_money(x: Any) -> str:
+    try:
+        v = float(x)
+        return f"${int(round(v, 0)):,}"
+    except Exception:
+        return "N/A"
 
 
 DEFAULT_WEIGHTS = {
@@ -141,18 +156,22 @@ def preprocess_catalog(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
     expected = [
         "make", "model", "option_text", "VClass", "MPG_comb", "overall_safety",
-        "passengers", "fuelType", "Range_mi", "electricRange_mi"
+        "passengers", "fuelType", "Range_mi", "electricRange_mi",
+        # אופציונליים למחיר ועלות דלק:
+        "price_best", "price_source", "annual_fuel_cost",
     ]
     for col in expected:
         if col not in df.columns:
             df[col] = np.nan
 
+    # גודל רכב לנוחות/שימוש
     df["vclass_size"] = df["VClass"].map(_vclass_size_score)
 
-    # MPG normalization per fuel type to avoid EVs dominating
+    # נורמליזציית יעילות פר דלק כדי לא לתת ל-EV לבלוע הכל
     fuel_key = df["fuelType"].fillna("unknown").astype(str)
     df["mpg_norm"] = df.groupby(fuel_key)["MPG_comb"].transform(lambda s: _robust_minmax(s))
 
+    # בטיחות 0..1
     df["safety_norm"] = df["overall_safety"].apply(_safety_to_numeric)
 
     return df
@@ -168,17 +187,20 @@ def _effective_weights(profile: UserProfile, df: pd.DataFrame) -> Dict[str, floa
     if profile.prioritize_space:
         w["passengers"] += 0.05
 
-    has_price = any(col in df.columns for col in ("msrp", "price"))
+    # ניקוד תקציב רק אם יש price_best בפועל וגם יש למשתמש תקציב
+    has_price = "price_best" in df.columns and df["price_best"].notna().any()
     if has_price and profile.budget:
-        w["budget"] = 0.15
+        w["budget"] = 0.20  # משקל ברירת מחדל לתקציב כשיש מחיר
         non_budget_sum = sum(v for k, v in w.items() if k != "budget")
         for k in list(w.keys()):
             if k != "budget":
                 w[k] *= (1.0 - w["budget"]) / max(non_budget_sum, 1e-9)
 
+    # override ידני אם ביקש
     for k, v in (profile.weights or {}).items():
         w[k] = float(v)
 
+    # נרמול לסכום 1
     total = sum(w.values())
     for k in list(w.keys()):
         w[k] = w[k] / max(total, 1e-9)
@@ -252,18 +274,21 @@ def score_vehicle_row_v2(row: pd.Series, profile: UserProfile, weights: Dict[str
     u_fit = _usage_fit(size, profile.usage)
     reasons.append(f"Usage fit {u_fit:.2f} for {profile.usage}")
 
-    # Budget
+    # Budget (price_best אם קיים)
     price = None
-    for c in ("msrp", "price"):
-        if c in row and pd.notna(row[c]):
-            try:
-                price = float(row[c])
-                break
-            except Exception:
-                pass
+    if "price_best" in row and pd.notna(row["price_best"]):
+        try:
+            price = float(row["price_best"])
+        except Exception:
+            price = None
     b_fit = _budget_fit(price, profile.budget)
     if price is not None and profile.budget is not None:
-        reasons.append(f"Budget fit {b_fit:.2f} (price {price:,.0f} vs budget {profile.budget:,.0f})")
+        src = row.get("price_source") or "est."
+        reasons.append(f"Budget fit {b_fit:.2f} ({_fmt_money(price)} vs {_fmt_money(profile.budget)} • {src})")
+
+    # Annual fuel cost (אם קיים, מוסיף ערך למשתמש)
+    if "annual_fuel_cost" in row and pd.notna(row["annual_fuel_cost"]):
+        reasons.append(f"Estimated annual fuel cost: {_fmt_money(row['annual_fuel_cost'])}")
 
     score = (
         weights.get("passengers", 0.0) * p_fit
@@ -372,6 +397,12 @@ def rank_cars(
     if df.empty:
         return df
 
+    # Budget hard filter רק אם יש price_best בקטלוג ויש תקציב
+    has_price = "price_best" in df.columns and df["price_best"].notna().any()
+    if has_price and profile.budget:
+        df = df[df["price_best"].notna()]
+        df = df[df["price_best"] <= float(profile.budget)]
+
     weights = _effective_weights(profile, df)
 
     scored: List[Dict[str, Any]] = []
@@ -385,7 +416,10 @@ def rank_cars(
 
     keep = [
         "make", "model", "option_text", "VClass", "fuelType",
-        "passengers", "MPG_comb", "overall_safety", "Range_mi", "electricRange_mi", "score", "reasons",
+        "passengers", "MPG_comb", "overall_safety", "Range_mi", "electricRange_mi",
+        # מחיר/עלות:
+        "price_best", "price_source", "annual_fuel_cost",
+        "score", "reasons",
     ]
     existing_keep = [c for c in keep if c in out.columns]
     out = out[existing_keep].sort_values(["score", "overall_safety", "MPG_comb"], ascending=[False, False, False])
@@ -438,9 +472,22 @@ if __name__ == "__main__":
     if ranked.empty:
         print("No vehicles matched your filters. Try relaxing constraints.")
     else:
-        cols = [c for c in ["make", "model", "option_text", "VClass", "fuelType", "passengers", "MPG_comb", "overall_safety", "Range_mi", "electricRange_mi", "score"] if c in ranked.columns]
+        cols = [c for c in [
+            "make", "model", "option_text", "VClass", "fuelType",
+            "passengers", "MPG_comb", "overall_safety", "Range_mi", "electricRange_mi",
+            "price_best", "price_source", "score"
+        ] if c in ranked.columns]
         print("\nTop results:\n")
-        print(ranked[cols].to_string(index=False, formatters={"score": "{:.3f}".format}))
+        # עיצוב ציון ומחיר
+        def _fmt_row(row: pd.Series) -> dict:
+            d = row.to_dict()
+            if "score" in d and pd.notna(d["score"]):
+                d["score"] = f"{d['score']:.3f}"
+            if "price_best" in d and pd.notna(d["price_best"]):
+                d["price_best"] = _fmt_money(d["price_best"])
+            return d
+        pretty = ranked[cols].apply(_fmt_row, axis=1, result_type="expand")
+        print(pretty.to_string(index=False))
         print("\nReasons (per row):\n")
         for i, reasons in enumerate(ranked.get("reasons", [])):
             print(f"#{i+1}")

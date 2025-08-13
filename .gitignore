@@ -5,3 +5,9 @@ __pycache__/
 .DS_Store
 data/*.cache.json
 .env
+data/*.parquet
+data/*.csv
+data/session_logs.jsonl
+.env
+.DS_Store
+scripts/puppeteer/node_modules

@@ -1,0 +1,11 @@
+{
+  "urlTemplate": "https://www.cars.com/shopping/results/?stock_type=used&makes[]={makeSlug}&models[]={makeSlug}-{modelSlug}&year_min={year}&year_max={year}&maximum_distance=all&zip=94103",
+  "waitTimeoutMs": 40000,
+  "preWaitSelector": ".vehicle-card",
+  "priceSelector": ".primary-price, [data-test='vehicleCardPrice'], [data-test='vehicle-card-price']",
+  "priceAttr": null,
+  "priceRegex": "\\$\\s*([0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)\\b",
+  "minPrices": 5,
+  "rateLimitMs": 4000,
+  "headless": false
+}

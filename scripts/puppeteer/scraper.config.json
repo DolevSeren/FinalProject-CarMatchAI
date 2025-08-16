@@ -1,11 +1,21 @@
 {
-  "urlTemplate": "https://www.cars.com/shopping/results/?stock_type=used&makes[]={makeSlug}&models[]={makeSlug}-{modelSlug}&year_min={year}&year_max={year}&maximum_distance=all&zip=94103",
-  "waitTimeoutMs": 40000,
-  "preWaitSelector": ".vehicle-card",
-  "priceSelector": ".primary-price, [data-test='vehicleCardPrice'], [data-test='vehicle-card-price']",
-  "priceAttr": null,
-  "priceRegex": "\\$\\s*([0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)\\b",
-  "minPrices": 5,
-  "rateLimitMs": 4000,
-  "headless": false
+  "headless": true,
+  "slowMo": 0,
+  "viewport": { "width": 1366, "height": 900 },
+  "minPrices": 20,
+  "maxPages": 3,
+  "rateLimitMs": 2500,
+  "timeoutMs": 45000,
+  "zip": "94103",
+  "urlTemplate": "https://www.cars.com/shopping/results/?stock_type=used&makes[]={makeSlug}&models[]={makeSlug}-{modelSlug}&year_min={year}&year_max={year}&maximum_distance=all&zip={zip}",
+  "priceSelectors": [
+    "[data-test='vehicleCardPriceLabel']",
+    ".primary-price",
+    "[data-qa='price']",
+    ".listing-row__price",
+    ".vehicle-card .price-section .primary-price"
+  ],
+  "cardSelector": ".vehicle-card",
+  "nextPageSelector": "a[aria-label='Next page'], a[rel='next']",
+  "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
 }

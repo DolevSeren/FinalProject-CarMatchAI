@@ -11,3 +11,6 @@ data/session_logs.jsonl
 .env
 .DS_Store
 scripts/puppeteer/node_modules
+.idea
+data/scraped_used*.csv
+data/targets*.csv

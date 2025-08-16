@@ -67,7 +67,8 @@ def normalize_condition(s: str) -> str:
 
 def normalize_fuel(s: str) -> str:
     s = (s or "").strip().lower()
-    valid = ["bev", "phev", "gas", "any"]
+    # תמיכה גם ב-hybrid/diesel
+    valid = {"bev","phev","gas","any","hybrid","diesel"}
     return s if s in valid else "any"
 
 def parse_int(s: str, default=None):
@@ -82,11 +83,17 @@ def clean_one_line(text: str) -> str:
     lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
     return " ".join(lines)
 
+def as_score(x):
+    try:
+        return f"{float(x):.3f}"
+    except Exception:
+        return str(x)
+
 # כל השאלות בסדר
 QUESTIONS = [
     ("condition", "New or used? (new / used / any)"),
     ("budget_usd", "What's your budget in USD? (number)"),
-    ("fuel_type", "Preferred fuel? (bev / phev / gas / any)"),
+    ("fuel_type", "Preferred fuel? (bev / phev / hybrid / diesel / gas / any)"),
     ("passengers", "How many passengers usually ride with you? (number)"),
     ("annual_km", "How many kilometers per year? (press Enter to skip)"),
     ("terrain", "Typical terrain? (flat / hilly, or leave blank)"),
@@ -213,7 +220,7 @@ if mode == "Chat":
             st.write(clean_one_line(summary))
             st.write("Alright, let me crunch the numbers and find your match… 🚗💨")
 
-        # Call the new orchestrator (returns unified list under "results")
+        # Call orchestrator (returns unified list under "results")
         result = get_recommendations(st.session_state.answers, catalog_path=CATALOG_PATH)
         items = result.get("results", [])
         count = result.get("count", 0)
@@ -224,13 +231,18 @@ if mode == "Chat":
             else:
                 st.success(f"Found {count} vehicles. Showing top {min(10, len(items))}.")
                 for i, it in enumerate(items[:10], start=1):
-                    score = it.get("score")
-                    price = it.get("price_best")
-                    price_txt = f" | {price}" if price else ""
+                    score = as_score(it.get("score"))
+                    price = it.get("price_best")  # already formatted string if exists
+                    src   = it.get("price_source") or "—"
+                    price_txt = f" | {price} • {src}" if price else ""
                     st.markdown(f"**{i}. {it.get('make')} {it.get('model')}** — score {score}{price_txt}")
                     with st.expander("Why this pick?"):
-                        for r in (it.get("reasons") or []):
-                            st.markdown(f"- {r}")
+                        reasons = it.get("reasons") or []
+                        if isinstance(reasons, (list, tuple)):
+                            for r in reasons:
+                                st.markdown(f"- {r}")
+                        else:
+                            st.write(reasons)
 
         st.session_state.results_shown = True
 
@@ -243,7 +255,7 @@ else:
     with st.form("user_form"):
         condition = st.selectbox("New / Used / Any?", ["new", "used", "any"], index=2)
         budget = st.number_input("Budget (USD)", min_value=0, step=500, value=25000)
-        fuel_type = st.selectbox("Fuel type", ["bev", "phev", "gas", "any"], index=3)
+        fuel_type = st.selectbox("Fuel type", ["bev", "phev", "hybrid", "diesel", "gas", "any"], index=5)
         passengers = st.number_input("Passengers", min_value=1, max_value=9, value=4)
         annual_km = st.number_input("Annual kilometers", min_value=0, max_value=100000, value=12000, step=500)
         terrain = st.selectbox("Terrain", ["flat", "hilly"], index=0)
@@ -256,7 +268,7 @@ else:
     if submitted:
         answers = dict(
             condition=condition,
-            budget_usd=budget,
+            budget_usd=budget if budget > 0 else None,
             fuel_type=fuel_type,
             passengers=int(passengers),
             annual_km=int(annual_km),
@@ -281,6 +293,10 @@ else:
             st.dataframe(df, use_container_width=True, hide_index=True)
             st.subheader("Why these picks?")
             for i, it in enumerate(items[:10], start=1):
-                with st.expander(f"#{i} — {it.get('make')} {it.get('model')} (score {it.get('score')})"):
-                    for r in (it.get("reasons") or []):
-                        st.markdown(f"- {r}")
+                with st.expander(f"#{i} — {it.get('make')} {it.get('model')} (score {as_score(it.get('score'))})"):
+                    reasons = it.get("reasons") or []
+                    if isinstance(reasons, (list, tuple)):
+                        for r in reasons:
+                            st.markdown(f"- {r}")
+                    else:
+                        st.write(reasons)

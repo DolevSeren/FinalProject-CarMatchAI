@@ -14,3 +14,19 @@ scripts/puppeteer/node_modules
 .idea
 data/scraped_used*.csv
 data/targets*.csv
+# DB / Data (do not keep in code repo)
+data/*.db
+data/*.sqlite
+data/*.sqlite3
+data/*-backup.sqlite3
+data/*dump.sql
+data/*dump.sql.gz
+*.db
+*.sqlite
+*.sqlite3
+*.sql
+*.sql.gz
+
+# Secrets / env files
+.env
+*.env
